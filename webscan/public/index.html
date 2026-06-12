@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>WebScan</title>
+    <link rel="stylesheet" href="/css/main.css">
+    <!-- Desktop and Mobile CSS will be injected dynamically by app.js -->
+</head>
+<body>
+    <div id="app-container">
+        <!-- Desktop UI -->
+        <div id="desktop-ui" class="hidden">
+            <!-- View 1: Connection Screen -->
+            <div id="desktop-view-1" class="view active-view">
+                <div class="connection-card">
+                    <h1>WebScan</h1>
+                    <p class="subtitle">Local Document Scanner</p>
+
+                    <div class="qr-container">
+                        <div id="qrcode"></div>
+                    </div>
+
+                    <div class="url-display" id="local-url">
+                        <!-- URL injected via JS -->
+                    </div>
+
+                    <div class="status-indicator">
+                        <div class="pulse-dot"></div>
+                        <p>Waiting for phone to connect...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- View 2: Live Capture Screen -->
+            <div id="desktop-view-2" class="view hidden">
+                <div class="top-bar">
+                    <h2>Live Capture</h2>
+                    <div class="top-bar-right">
+                        <span class="page-badge"><span id="page-count">0</span> Pages</span>
+                        <button id="btn-done-scanning" class="btn primary">Done Scanning</button>
+                    </div>
+                </div>
+
+                <div class="capture-layout">
+                    <div class="left-panel thumbnail-strip" id="capture-strip">
+                        <!-- Thumbnails added here dynamically -->
+                    </div>
+
+                    <div class="right-panel">
+                        <div class="large-preview-container">
+                            <img id="capture-large-preview" src="" alt="No capture yet">
+                            <div id="capture-empty-state">Waiting for photo...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- View 3: Edit & Export Screen -->
+            <div id="desktop-view-3" class="view hidden">
+                <div class="edit-layout">
+                    <div class="sidebar" id="edit-sidebar">
+                        <!-- Thumbnails added here dynamically -->
+                    </div>
+
+                    <div class="main-editor">
+                        <div class="editor-toolbar">
+                            <div class="toolbar-group">
+                                <button id="btn-crop" class="btn">Perspective Crop</button>
+                                <select id="filter-select" class="btn">
+                                    <option value="none">Original</option>
+                                    <option value="magic">Magic</option>
+                                    <option value="bw">B&W</option>
+                                    <option value="print">Print</option>
+                                    <option value="photo">Photo</option>
+                                </select>
+                            </div>
+                            <div class="toolbar-group">
+                                <button id="btn-undo" class="btn">Undo</button>
+                                <button id="btn-delete-page" class="btn danger">Delete Page</button>
+                            </div>
+                        </div>
+
+                        <div class="editor-canvas-container" id="editor-container">
+                            <canvas id="editor-canvas"></canvas>
+                        </div>
+
+                        <div class="bottom-bar">
+                            <button id="btn-download-pdf" class="btn primary">Download All as PDF</button>
+                            <button id="btn-download-jpeg" class="btn">Download Selected as JPEG</button>
+                            <button id="btn-new-scan" class="btn secondary">Start New Scan</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobile UI -->
+        <div id="mobile-ui" class="hidden">
+            <!-- Step 1: Camera Activation -->
+            <div id="mobile-step-1" class="mobile-step active-step">
+                <div class="activation-screen">
+                    <h1>WebScan</h1>
+                    <p>Use this device as a wireless document scanner.</p>
+                    <button id="btn-activate-camera" class="btn primary large-btn">Tap to Activate Camera</button>
+                    <div id="camera-error" class="error-msg hidden"></div>
+                </div>
+            </div>
+
+            <!-- Step 2: Live Camera / Capture -->
+            <div id="mobile-step-2" class="mobile-step hidden">
+                <video id="camera-video" autoplay playsinline></video>
+                <canvas id="offscreen-canvas" class="hidden"></canvas>
+
+                <div class="camera-ui">
+                    <div class="top-row">
+                        <button id="btn-mobile-done" class="btn small">Done</button>
+                    </div>
+
+                    <div class="bottom-row">
+                        <div class="shutter-container">
+                            <button id="btn-shutter" class="shutter-btn"></button>
+                        </div>
+                    </div>
+
+                    <!-- Flash animation overlay -->
+                    <div id="capture-flash" class="flash-overlay"></div>
+                    <!-- Capture counter badge -->
+                    <div id="capture-badge" class="capture-badge hidden">+1</div>
+                </div>
+            </div>
+
+            <!-- Done Screen -->
+            <div id="mobile-done-screen" class="mobile-step hidden">
+                <div class="activation-screen">
+                    <h2>Session Complete</h2>
+                    <p>You can close this tab and continue on your desktop.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- External Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+
+    <!-- Application Entry Point -->
+    <script type="module" src="/js/app.js"></script>
+</body>
+</html>
