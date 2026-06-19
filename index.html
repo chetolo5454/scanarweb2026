@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2D Pool Game</title>
+<style>
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: #111;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #gameContainer {
+    position: relative;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+    border-radius: 20px;
+    background-color: #4a2f1d; /* Wood outer border */
+    padding: 20px;
+  }
+  canvas {
+    background-color: #1a7a3e; /* Pool cloth */
+    border-radius: 5px;
+    display: block;
+  }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+    <canvas id="poolCanvas" width="800" height="400"></canvas>
+</div>
+<script>
+class Vector {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+    }
+    add(v) { return new Vector(this.x + v.x, this.y + v.y); }
+    sub(v) { return new Vector(this.x - v.x, this.y - v.y); }
+    mult(n) { return new Vector(this.x * n, this.y * n); }
+    mag() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+    normalize() {
+        const m = this.mag();
+        return m === 0 ? new Vector(0, 0) : new Vector(this.x / m, this.y / m);
+    }
+    dot(v) { return this.x * v.x + this.y * v.y; }
+    dist(v) { return this.sub(v).mag(); }
+    copy() { return new Vector(this.x, this.y); }
+    perp() { return new Vector(-this.y, this.x); }
+}
+
+const FRICTION = 0.985;
+const RESTITUTION = 0.95;
+const WALL_RESTITUTION = 0.8;
+const MIN_VELOCITY = 0.05;
+
+function closestPointOnSegment(p, a, b) {
+    const ab = b.sub(a);
+    const ap = p.sub(a);
+    let t = ap.dot(ab) / ab.dot(ab);
+    t = Math.max(0, Math.min(1, t));
+    return a.add(ab.mult(t));
+}
+
+function rayCircleIntersection(rayOrigin, rayDir, circleCenter, r) {
+    // Ray: P = O + t*D
+    // Circle: |P - C|^2 = r^2
+    const L = circleCenter.sub(rayOrigin);
+    const tca = L.dot(rayDir);
+    if (tca < 0) return null; // Circle is behind ray
+    const d2 = L.dot(L) - tca * tca;
+    if (d2 > r * r) return null; // Ray misses circle
+    const thc = Math.sqrt(r * r - d2);
+    let t0 = tca - thc;
+    let t1 = tca + thc;
+    if (t0 < 0 && t1 < 0) return null;
+    return t0 < 0 ? t1 : t0;
+}
+
+// Ray-line segment intersection
+function raySegmentIntersection(ro, rd, p1, p2) {
+    const v1 = ro.sub(p1);
+    const v2 = p2.sub(p1);
+    const v3 = new Vector(-rd.y, rd.x);
+    const dot = v2.dot(v3);
+    if (Math.abs(dot) < 0.000001) return null; // Parallel
+
+    const t1 = (v2.x * v1.y - v2.y * v1.x) / dot;
+    const t2 = (v1.dot(v3)) / dot;
+
+    if (t1 >= 0 && (t2 >= 0 && t2 <= 1)) {
+        return {
+            point: ro.add(rd.mult(t1)),
+            distance: t1,
+            normal: new Vector(-v2.y, v2.x).normalize()
+        };
+    }
+    return null;
+}
+
+class Ball {
+    constructor(x, y, radius, color) {
+        this.pos = new Vector(x, y);
+        this.vel = new Vector(0, 0);
+        this.radius = radius;
+        this.mass = 1;
+        this.color = color;
+        this.isPotted = false;
+    }
+
+    update() {
+        if (this.isPotted) return;
+        this.pos = this.pos.add(this.vel);
+        this.vel = this.vel.mult(FRICTION);
+        if (this.vel.mag() < MIN_VELOCITY) {
+            this.vel = new Vector(0, 0);
+        }
+    }
+
+    draw(ctx) {
+        if (this.isPotted) return;
+        ctx.beginPath();
+        ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+
+        // Add a simple specular highlight to make it look like a pool ball
+        ctx.beginPath();
+        ctx.arc(this.pos.x - this.radius * 0.3, this.pos.y - this.radius * 0.3, this.radius * 0.2, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+        ctx.fill();
+    }
+}
+
+// Table setup
+const TABLE_WIDTH = 800;
+const TABLE_HEIGHT = 400;
+const POCKET_RADIUS = 25;
+const BALL_RADIUS = 12;
+const CUSHION_WIDTH = 25;
+
+// Playing area bounds
+const bounds = {
+    left: CUSHION_WIDTH,
+    right: TABLE_WIDTH - CUSHION_WIDTH,
+    top: CUSHION_WIDTH,
+    bottom: TABLE_HEIGHT - CUSHION_WIDTH
+};
+
+// Walls definition (segments)
+const walls = [
+    // Top walls
+    { p1: new Vector(bounds.left + POCKET_RADIUS, bounds.top), p2: new Vector(TABLE_WIDTH / 2 - POCKET_RADIUS, bounds.top) },
+    { p1: new Vector(TABLE_WIDTH / 2 + POCKET_RADIUS, bounds.top), p2: new Vector(bounds.right - POCKET_RADIUS, bounds.top) },
+    // Bottom walls
+    { p1: new Vector(bounds.left + POCKET_RADIUS, bounds.bottom), p2: new Vector(TABLE_WIDTH / 2 - POCKET_RADIUS, bounds.bottom) },
+    { p1: new Vector(TABLE_WIDTH / 2 + POCKET_RADIUS, bounds.bottom), p2: new Vector(bounds.right - POCKET_RADIUS, bounds.bottom) },
+    // Left wall
+    { p1: new Vector(bounds.left, bounds.top + POCKET_RADIUS), p2: new Vector(bounds.left, bounds.bottom - POCKET_RADIUS) },
+    // Right wall
+    { p1: new Vector(bounds.right, bounds.top + POCKET_RADIUS), p2: new Vector(bounds.right, bounds.bottom - POCKET_RADIUS) }
+];
+
+const pockets = [
+    new Vector(bounds.left, bounds.top), // Top left
+    new Vector(TABLE_WIDTH / 2, bounds.top - 5), // Top middle
+    new Vector(bounds.right, bounds.top), // Top right
+    new Vector(bounds.left, bounds.bottom), // Bottom left
+    new Vector(TABLE_WIDTH / 2, bounds.bottom + 5), // Bottom middle
+    new Vector(bounds.right, bounds.bottom) // Bottom right
+];
+
+function drawTable(ctx) {
+    // Clear canvas with table color
+    ctx.fillStyle = '#1a7a3e';
+    ctx.fillRect(0, 0, TABLE_WIDTH, TABLE_HEIGHT);
+
+    // Draw cushions (darker green)
+    ctx.fillStyle = '#115e2c';
+    ctx.fillRect(0, 0, TABLE_WIDTH, CUSHION_WIDTH); // Top
+    ctx.fillRect(0, TABLE_HEIGHT - CUSHION_WIDTH, TABLE_WIDTH, CUSHION_WIDTH); // Bottom
+    ctx.fillRect(0, 0, CUSHION_WIDTH, TABLE_HEIGHT); // Left
+    ctx.fillRect(TABLE_WIDTH - CUSHION_WIDTH, 0, CUSHION_WIDTH, TABLE_HEIGHT); // Right
+
+    // Draw pockets
+    ctx.fillStyle = '#0a0a0a';
+    for (let pocket of pockets) {
+        ctx.beginPath();
+        ctx.arc(pocket.x, pocket.y, POCKET_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+// Physics collision logic
+function handleWallCollisions(ball) {
+    if (ball.isPotted) return;
+    for (let wall of walls) {
+        const closest = closestPointOnSegment(ball.pos, wall.p1, wall.p2);
+        const distVector = ball.pos.sub(closest);
+        const distSq = distVector.dot(distVector);
+
+        if (distSq < ball.radius * ball.radius && distSq > 0) {
+            const dist = Math.sqrt(distSq);
+            const normal = distVector.mult(1 / dist);
+            // Push ball out
+            const overlap = ball.radius - dist;
+            ball.pos = ball.pos.add(normal.mult(overlap));
+
+            // Reflect velocity
+            const dotProduct = ball.vel.dot(normal);
+            if (dotProduct < 0) {
+                ball.vel = ball.vel.sub(normal.mult(2 * dotProduct)).mult(WALL_RESTITUTION);
+            }
+        }
+    }
+}
+
+function handleBallCollisions(ball1, ball2) {
+    if (ball1.isPotted || ball2.isPotted) return;
+    const distVector = ball1.pos.sub(ball2.pos);
+    const distSq = distVector.dot(distVector);
+    const minDist = ball1.radius + ball2.radius;
+
+    if (distSq < minDist * minDist && distSq > 0) {
+        const dist = Math.sqrt(distSq);
+        const normal = distVector.mult(1 / dist);
+
+        // Push apart
+        const overlap = 0.5 * (minDist - dist);
+        ball1.pos = ball1.pos.add(normal.mult(overlap));
+        ball2.pos = ball2.pos.sub(normal.mult(overlap));
+
+        // Relative velocity
+        const relVel = ball1.vel.sub(ball2.vel);
+        const velAlongNormal = relVel.dot(normal);
+
+        if (velAlongNormal < 0) {
+            const j = -(1 + RESTITUTION) * velAlongNormal;
+            // Mass is 1 for both, so inverse mass is 1. Formula: j / (1/m1 + 1/m2) = j / 2
+            const impulse = j / 2;
+            const impulseVec = normal.mult(impulse);
+            ball1.vel = ball1.vel.add(impulseVec);
+            ball2.vel = ball2.vel.sub(impulseVec);
+        }
+    }
+}
+
+// Aiming logic
+function raycast(ro, rd, ignoreBall = null) {
+    let closestIntersection = null;
+    let closestDist = Infinity;
+    let type = null;
+    let normal = null;
+    let hitBall = null;
+
+    // Check balls
+    const ballsToCheck = [whiteBall, redBall].filter(b => b !== ignoreBall && !b.isPotted);
+    for (let ball of ballsToCheck) {
+        // We look for intersection with an expanded circle (radius * 2) to find the ghost ball center
+        const t = rayCircleIntersection(ro, rd, ball.pos, ball.radius * 2);
+        if (t !== null && t > 0.001 && t < closestDist) {
+            closestDist = t;
+            closestIntersection = ro.add(rd.mult(t));
+            type = 'ball';
+            hitBall = ball;
+        }
+    }
+
+    // Check walls
+    for (let wall of walls) {
+        // Offset wall by ball radius
+        let wallNormal = new Vector(-(wall.p2.y - wall.p1.y), wall.p2.x - wall.p1.x).normalize();
+        // Ensure the normal points towards the center of the table
+        const wallCenter = wall.p1.add(wall.p2).mult(0.5);
+        const toCenter = new Vector(TABLE_WIDTH / 2, TABLE_HEIGHT / 2).sub(wallCenter);
+        if (wallNormal.dot(toCenter) < 0) {
+            wallNormal = wallNormal.mult(-1);
+        }
+
+        const p1Offset = wall.p1.add(wallNormal.mult(BALL_RADIUS));
+        const p2Offset = wall.p2.add(wallNormal.mult(BALL_RADIUS));
+
+        const hit = raySegmentIntersection(ro, rd, p1Offset, p2Offset);
+        if (hit && hit.distance > 0.001 && hit.distance < closestDist) {
+            closestDist = hit.distance;
+            closestIntersection = hit.point;
+            type = 'wall';
+            normal = hit.normal;
+        }
+    }
+
+    if (closestIntersection) {
+        return { point: closestIntersection, distance: closestDist, type: type, normal: normal, hitBall: hitBall };
+    }
+    return null;
+}
+
+function drawAiming(ctx, startPos, dragVector) {
+    if (dragVector.mag() < 1) return;
+    const maxPower = 150;
+    let power = dragVector.mag();
+    if (power > maxPower) power = maxPower;
+
+    const rd = dragVector.mult(-1).normalize();
+    let ro = startPos.copy();
+    let currentDir = rd.copy();
+
+    ctx.lineWidth = 1.5;
+
+    // Perform up to 2 reflections
+    let maxReflections = 3;
+    let hitPoint = null;
+    let lastHitBall = whiteBall;
+
+    for (let i = 0; i < maxReflections; i++) {
+        const hit = raycast(ro, currentDir, lastHitBall);
+
+        if (!hit) break;
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(ro.x, ro.y);
+        ctx.lineTo(hit.point.x, hit.point.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        if (hit.type === 'wall') {
+            // Calculate reflection
+            const dot = currentDir.dot(hit.normal);
+            currentDir = currentDir.sub(hit.normal.mult(2 * dot));
+            // Nudge starting point slightly to avoid hitting the same wall immediately due to float precision
+            ro = hit.point.add(currentDir.mult(0.1));
+            lastHitBall = null; // No longer ignoring white ball after a bounce
+        } else if (hit.type === 'ball') {
+            // Draw ghost ball
+            ctx.beginPath();
+            ctx.arc(hit.point.x, hit.point.y, BALL_RADIUS, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.stroke();
+
+            // Calculate deflection vectors
+            const targetBall = hit.hitBall;
+            const collisionNormal = targetBall.pos.sub(hit.point).normalize();
+            const collisionTangent = new Vector(-collisionNormal.y, collisionNormal.x);
+
+            // Red ball path (along normal)
+            const redPathEnd = hit.point.add(collisionNormal.mult(60));
+            ctx.beginPath();
+            ctx.moveTo(hit.point.x, hit.point.y);
+            ctx.lineTo(redPathEnd.x, redPathEnd.y);
+            ctx.strokeStyle = 'rgba(255, 0, 0, 0.7)';
+            ctx.stroke();
+
+            // White ball path (deflection)
+            // Assuming no side spin, deflection is along tangent
+            const whitePathEnd = hit.point.add(collisionTangent.mult(40 * Math.sign(currentDir.dot(collisionTangent))));
+            ctx.beginPath();
+            ctx.moveTo(hit.point.x, hit.point.y);
+            ctx.lineTo(whitePathEnd.x, whitePathEnd.y);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.stroke();
+            break; // Stop after hitting a ball
+        }
+    }
+}
+
+// Game instances
+let whiteBall = new Ball(200, TABLE_HEIGHT / 2, BALL_RADIUS, '#ffffff');
+let redBall = new Ball(600, TABLE_HEIGHT / 2, BALL_RADIUS, '#ff0000');
+
+// Input handling
+const canvas = document.getElementById('poolCanvas');
+const ctx = canvas.getContext('2d');
+
+let isDragging = false;
+let dragStart = null;
+let dragCurrent = null;
+
+function getMousePos(evt) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    let clientX = evt.clientX;
+    let clientY = evt.clientY;
+
+    if (evt.touches && evt.touches.length > 0) {
+        clientX = evt.touches[0].clientX;
+        clientY = evt.touches[0].clientY;
+    }
+
+    return new Vector(
+        (clientX - rect.left) * scaleX,
+        (clientY - rect.top) * scaleY
+    );
+}
+
+function handleStart(evt) {
+    // Only allow aiming if balls are not moving
+    if (whiteBall.vel.mag() !== 0 || redBall.vel.mag() !== 0) return;
+
+    const pos = getMousePos(evt);
+    // Check if clicked near white ball to start drag
+    if (pos.dist(whiteBall.pos) < whiteBall.radius * 3) {
+        isDragging = true;
+        dragStart = whiteBall.pos.copy();
+        dragCurrent = pos;
+    }
+}
+
+function handleMove(evt) {
+    if (!isDragging) return;
+    evt.preventDefault(); // Prevent scrolling on touch
+    dragCurrent = getMousePos(evt);
+}
+
+function handleEnd(evt) {
+    if (!isDragging) return;
+    isDragging = false;
+
+    const dragVector = dragCurrent.sub(dragStart);
+    if (dragVector.mag() > 5) {
+        // Shoot
+        let power = dragVector.mag() * 0.1; // Scale power
+        if (power > 15) power = 15; // Max power
+        const dir = dragVector.mult(-1).normalize();
+        whiteBall.vel = dir.mult(power);
+    }
+}
+
+canvas.addEventListener('mousedown', handleStart);
+canvas.addEventListener('mousemove', handleMove);
+canvas.addEventListener('mouseup', handleEnd);
+canvas.addEventListener('mouseout', handleEnd);
+
+canvas.addEventListener('touchstart', handleStart, {passive: false});
+canvas.addEventListener('touchmove', handleMove, {passive: false});
+canvas.addEventListener('touchend', handleEnd);
+
+// Game Loop
+function gameLoop() {
+    // Update physics multiple times per frame for stability
+    const subSteps = 5;
+    for (let i = 0; i < subSteps; i++) {
+        whiteBall.update();
+        redBall.update();
+
+        handleBallCollisions(whiteBall, redBall);
+        handleWallCollisions(whiteBall);
+        handleWallCollisions(redBall);
+
+        // Check pockets
+        checkPockets(whiteBall);
+        checkPockets(redBall);
+    }
+
+    // Draw
+    drawTable(ctx);
+
+    if (!redBall.isPotted) redBall.draw(ctx);
+    if (!whiteBall.isPotted) whiteBall.draw(ctx);
+
+    // Draw aiming if dragging
+    if (isDragging) {
+        const dragVector = dragCurrent.sub(dragStart);
+        drawAiming(ctx, whiteBall.pos, dragVector);
+
+        // Draw cue stick representation (optional simple line)
+        ctx.beginPath();
+        ctx.moveTo(whiteBall.pos.x + dragVector.normalize().mult(BALL_RADIUS + 5).x, whiteBall.pos.y + dragVector.normalize().mult(BALL_RADIUS + 5).y);
+        ctx.lineTo(whiteBall.pos.x + dragVector.x, whiteBall.pos.y + dragVector.y);
+        ctx.strokeStyle = '#8B4513';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+    }
+
+    requestAnimationFrame(gameLoop);
+}
+
+function checkPockets(ball) {
+    if (ball.isPotted) return;
+    for (let pocket of pockets) {
+        if (ball.pos.dist(pocket) < POCKET_RADIUS) {
+            ball.isPotted = true;
+            ball.vel = new Vector(0, 0);
+
+            // Logic for potting
+            if (ball === redBall) {
+                setTimeout(() => {
+                    respawnRedBall();
+                    resetWhiteBall();
+                }, 1000);
+            } else if (ball === whiteBall) {
+                // Scratch
+                setTimeout(() => {
+                    resetWhiteBall();
+                }, 1000);
+            }
+        }
+    }
+}
+
+function isValidSpawn(pos) {
+    // Check against walls
+    if (pos.x < bounds.left + BALL_RADIUS || pos.x > bounds.right - BALL_RADIUS ||
+        pos.y < bounds.top + BALL_RADIUS || pos.y > bounds.bottom - BALL_RADIUS) {
+        return false;
+    }
+    // Check against pockets
+    for (let pocket of pockets) {
+        if (pos.dist(pocket) < POCKET_RADIUS + BALL_RADIUS) return false;
+    }
+    // Check against white ball
+    if (!whiteBall.isPotted && pos.dist(whiteBall.pos) < BALL_RADIUS * 2 + 10) return false;
+
+    return true;
+}
+
+function respawnRedBall() {
+    let newPos;
+    let valid = false;
+    while (!valid) {
+        const x = bounds.left + BALL_RADIUS + Math.random() * (bounds.right - bounds.left - BALL_RADIUS * 2);
+        const y = bounds.top + BALL_RADIUS + Math.random() * (bounds.bottom - bounds.top - BALL_RADIUS * 2);
+        newPos = new Vector(x, y);
+        valid = isValidSpawn(newPos);
+    }
+    redBall.pos = newPos;
+    redBall.vel = new Vector(0, 0);
+    redBall.isPotted = false;
+}
+
+function resetWhiteBall() {
+    whiteBall.pos = new Vector(200, TABLE_HEIGHT / 2);
+    whiteBall.vel = new Vector(0, 0);
+    whiteBall.isPotted = false;
+}
+
+// Start game
+gameLoop();
+
+console.log("Game fully initialized.");
+</script>
+</body>
+</html>
